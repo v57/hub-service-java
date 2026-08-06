@@ -7,9 +7,11 @@ Java port of [hub-service](https://github.com/v57/hub-service) — connect to a
 [hub](https://github.com/v57/hub-lite) (default `ws://127.0.0.1:1997`), host
 your own post/stream API endpoints, register apps, and call API through the hub.
 
-Lite port: no auth, no keychain, no crypto (hub-pro territory). The wire
-contract matches the TS reference (`hub/profile/update`, `hub/service/update`,
-AppInterface + element DSL).
+The wire contract matches the TS reference (`hub/profile/update`,
+`hub/service/update`, AppInterface + element DSL). Hub-pro auth is supported:
+every (re)connect sends `auth` + `v` headers signed by the ed25519 keychain
+(`auth` key file in the cwd — or `$HUBKEY`; generated if missing), exactly
+like the TS `hub-service/keychain.ts`. hub-lite ignores the headers.
 
 ## Install
 
@@ -59,6 +61,9 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
 
 - `Service(ServiceOptions)` — `ServiceOptions(String name, Map<String,Object> icon)`,
   default address 1997 or `HUB` env
+- `Keychain` — `sign()` → `key.<pub>.<sig>.<expiry>` token, `publicKey()`,
+  `setKeyPath(...)`; loads/generates the `auth` file (default `auth` in cwd or
+  `$HUBKEY`); attached as the `auth` header on every (re)connect
 - `post(String path, Function handler, ApiSettings... settings)` — fluent
 - `stream(String path, ...)` — streaming endpoint
 - `app(App)` — register app header + `AppInterface` stream at `header.path`

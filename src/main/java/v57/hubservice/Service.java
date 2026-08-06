@@ -16,14 +16,16 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Lets a Java process connect to a hub (hub-lite/hub-pro), host post/stream
  * API endpoints, and call API through the hub.
  *
- * <p>Lite port of hub-service (TS reference): no auth, no keychain, no
- * crypto. The wire contract matches the TS/Go reference — on every
- * (re)connect {@code hub/profile/update} (if a profile is set) and
+ * <p>Port of hub-service (TS reference). On every (re)connect the connection
+ * carries hub-pro auth headers {@code auth: <fresh sign()>} and {@code v: 0}
+ * (fresh token per connect; hub-lite ignores them), then
+ * {@code hub/profile/update} (if a profile is set) and
  * {@code hub/service/update} are re-sent, because the hub drops services on
  * disconnect.
  *
@@ -38,6 +40,7 @@ public final class Service {
   private final Channel<Object> channel = new Channel<>();
   private final Object address;
   private final Profile profile;
+  private final Supplier<String> sign;
   private final List<AppHeader> apps = new ArrayList<>();
   /** Every registered handler path (post, stream, app), registration order. */
   private final LinkedHashSet<String> paths = new LinkedHashSet<>();
@@ -58,13 +61,16 @@ public final class Service {
       this.address = opts.address;
     } else {
       var env = System.getenv("HUB");
-      this.address = (env != null && !env.isEmpty()) ? env : 1997;
+      this.address = (env != null && !env.isEmpty())
+          ? (env.matches("\\d+") ? Integer.parseInt(env) : env)
+          : 1997;
     }
     if ((opts.name != null && !opts.name.isEmpty()) || opts.icon != null) {
       this.profile = new Profile(opts.name, opts.icon);
     } else {
       this.profile = null;
     }
+    this.sign = opts.sign != null ? opts.sign : Keychain::sign;
   }
 
   /** The configured profile (null when neither name nor icon was set). */
@@ -242,7 +248,7 @@ public final class Service {
   private void step() {
     var current = client;
     if (current == null) {
-      current = channel.connect(addressString(), new ConnectOptions<>());
+      current = channel.connect(addressString(), new ConnectOptions<>(null, authHeaders()));
       client = current;
       sender = current.sender();
       wasConnected = false;
@@ -278,6 +284,16 @@ public final class Service {
       s.send("hub/profile/update", profile.toMap());
     }
     s.send("hub/service/update", update());
+  }
+
+  /**
+   * Fresh hub-pro auth headers for a connect: {@code auth} is a fresh signed
+   * token ({@code key.<pub>.<sig>.<expiry>}) and {@code v} is the protocol
+   * version. Built once per connect, so every (re)connect gets a fresh token.
+   * hub-lite ignores both headers.
+   */
+  private Map<String, String> authHeaders() {
+    return Map.of("auth", sign.get(), "v", "0");
   }
 
   private String addressString() {

@@ -37,7 +37,8 @@ public final class EchoMain {
         Map.of("hello", "world")
     ));
     service.start();
-    System.out.println("echo service started (hub-lite :1997)");
+    var hub = System.getenv("HUB");
+    System.out.println("echo service started (" + (hub != null && !hub.isEmpty() ? "HUB=" + hub : "hub-lite :1997") + ")");
     while (true) {
       Thread.sleep(1000);
     }
