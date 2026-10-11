@@ -4,3 +4,5 @@ build/
 *.iml
 .DS_Store
 auth
+CLAUDE.md
+/.claude
