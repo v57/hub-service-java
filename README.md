@@ -74,7 +74,8 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
   (`~/.hub/device.key`, `$HUB_DEVICE_KEY` or `ServiceOptions.deviceKeyPath`,
   created 0600; `deviceKey(KeyFile)` for a key kept elsewhere), renewed at
   connect with less than a day left. `instance(...)` names the service on its
-  device (default: profile name, else first path segment, else `service`);
+  device (default: profile name, else the working directory's name, else
+  `service`);
   `deviceName`, `platform`, `parent` override the suggestions; `device(false)`
   turns it off
 - `post(String path, Function handler, ApiSettings... settings)` — fluent
@@ -82,7 +83,8 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
   the handler also gets the `Request`: `caller()` (who is calling, from the
   hub's `context.hub.caller`: `key`, `deviceId`, `deviceName`, `groups`,
   `owner`, and `via`/`claimed` through a merged hub; null on hubs that don't
-  send it), `hubKey()` and the whole `context()`
+  send it, and unless the request's `context.hub.hubKey` is the pinned hub
+  key), `hubKey()` and the whole `context()`
 - `stream(String path, ...)` — streaming endpoint (also with a `(body, request)` handler)
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
 - `send(String path, Object body)` — client call through the hub

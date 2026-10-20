@@ -131,8 +131,7 @@ public final class Service {
 
   /**
    * The instance name the certificate carries: the option, else the profile
-   * name, else the first segment of the first registered path, else
-   * {@code service}.
+   * name, else the working directory's name, else {@code service}.
    */
   public String instance() {
     if (options.instance != null && !options.instance.isEmpty()) {
@@ -141,12 +140,8 @@ public final class Service {
     if (profile != null && profile.name() != null && !profile.name().isEmpty()) {
       return profile.name();
     }
-    synchronized (lock) {
-      if (!paths.isEmpty()) {
-        return paths.iterator().next().split("/")[0];
-      }
-    }
-    return "service";
+    var directory = java.nio.file.Path.of("").toAbsolutePath().getFileName();
+    return directory != null && !directory.toString().isEmpty() ? directory.toString() : "service";
   }
 
   /**
@@ -244,12 +239,13 @@ public final class Service {
   /**
    * Registers a request/response API endpoint whose handler also receives the
    * {@link Request}: the caller identity the hub forwards
-   * ({@link Request#caller()}) and the whole request context.
+   * ({@link Request#caller()}, only when the request's hub key is the pinned
+   * one) and the whole request context.
    */
   public Service post(String path, BiFunction<Object, Request, Object> handler, ApiSettings... settings) {
     addPath(path, settings);
     channel.post(path, ANY, ANY, ANY, request ->
-        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context())));
+        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context(), hubKey)));
     return this;
   }
 
@@ -271,7 +267,7 @@ public final class Service {
       String path, BiFunction<Object, Request, ChannelStream<Object>> handler, ApiSettings... settings) {
     addPath(path, settings);
     channel.stream(path, ANY, ANY, ANY, request ->
-        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context())));
+        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context(), hubKey)));
     return this;
   }
 

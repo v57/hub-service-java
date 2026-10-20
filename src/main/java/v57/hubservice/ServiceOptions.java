@@ -20,7 +20,7 @@ import java.util.function.Supplier;
  * {@code deviceKeyPath}, {@code $HUB_DEVICE_KEY} or {@code ~/.hub/device.key})
  * signs a certificate for the service key, sent in the {@code device} header.
  * {@code instance} names this service on its device (default: the profile
- * name, else the first segment of the first registered path, else
+ * name, else the working directory's name, else
  * {@code service}); {@code deviceName}, {@code platform} and {@code parent}
  * override what the certificate suggests. {@code device(false)} turns it off.
  */

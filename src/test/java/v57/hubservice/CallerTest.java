@@ -15,10 +15,19 @@ class CallerTest {
   void noHubContextMeansNoCaller() {
     assertNull(Caller.fromContext(null));
     assertNull(Caller.fromContext(Map.of("service", "x")));
-    var request = Request.of("echo", "hi", null);
+    var request = Request.of("echo", "hi", null, "hub");
     assertNull(request.caller());
     assertNull(request.hubKey());
     assertEquals(Map.of(), request.context());
+  }
+
+  @Test
+  void callerOnlyFromThePinnedHub() {
+    var context = Map.of("hub", Map.of("caller", Map.of("key", "k", "owner", true), "hubKey", "hub-a"));
+    assertEquals("k", Request.of("p", null, context, "hub-a").caller().key());
+    assertNull(Request.of("p", null, context, "hub-b").caller());
+    assertNull(Request.of("p", null, context, null).caller());
+    assertEquals("hub-a", Request.of("p", null, context, null).hubKey());
   }
 
   @Test

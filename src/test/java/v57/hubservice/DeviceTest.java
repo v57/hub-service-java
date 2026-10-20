@@ -93,11 +93,10 @@ class DeviceTest {
     var named = service(new ServiceOptions().name("Backup").instance("s3-local/Backup Disk"));
     assertEquals("s3-local/Backup Disk", named.instance());
     assertEquals("Backup", service(new ServiceOptions().name("Backup")).instance());
-    var byPath = service(new ServiceOptions());
-    assertEquals("service", byPath.instance());
-    byPath.post("s3/read", body -> body);
-    byPath.post("other/x", body -> body);
-    assertEquals("s3", byPath.instance());
+    var cwd = Path.of("").toAbsolutePath().getFileName().toString();
+    var unnamed = service(new ServiceOptions());
+    unnamed.post("s3/read", body -> body);
+    assertEquals(cwd, unnamed.instance());
   }
 
   @Test
