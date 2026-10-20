@@ -7,6 +7,7 @@ import v57.channel.ChannelStream;
 import v57.channel.ChannelStreams;
 import v57.channel.ConnectOptions;
 import v57.channel.Sender;
+import v57.channel.TypeRef;
 import v57.channel.Values;
 
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -50,6 +52,7 @@ import java.util.function.Supplier;
  */
 public final class Service {
   private static final long POLL_INTERVAL_MS = 10;
+  private static final TypeRef<Object> ANY = TypeRef.of(Object.class);
 
   private final Channel<Object> channel = new Channel<>();
   private final Object address;
@@ -231,12 +234,36 @@ public final class Service {
   }
 
   /**
+   * Registers a request/response API endpoint whose handler also receives the
+   * {@link Request}: the caller identity the hub forwards
+   * ({@link Request#caller()}) and the whole request context.
+   */
+  public Service post(String path, BiFunction<Object, Request, Object> handler, ApiSettings... settings) {
+    addPath(path, settings);
+    channel.post(path, ANY, ANY, ANY, request ->
+        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context())));
+    return this;
+  }
+
+  /**
    * Registers a streaming API endpoint. The handler receives the decoded body
    * and returns a {@link ChannelStream} of values to stream back.
    */
   public Service stream(String path, Function<Object, ChannelStream<Object>> handler, ApiSettings... settings) {
     addPath(path, settings);
     channel.stream(path, Object.class, Object.class, request -> handler.apply(request.body()));
+    return this;
+  }
+
+  /**
+   * Registers a streaming API endpoint whose handler also receives the
+   * {@link Request} with the caller identity.
+   */
+  public Service stream(
+      String path, BiFunction<Object, Request, ChannelStream<Object>> handler, ApiSettings... settings) {
+    addPath(path, settings);
+    channel.stream(path, ANY, ANY, ANY, request ->
+        handler.apply(request.body(), Request.of(request.path(), request.body(), request.context())));
     return this;
   }
 

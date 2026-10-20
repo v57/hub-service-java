@@ -78,7 +78,12 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
   `deviceName`, `platform`, `parent` override the suggestions; `device(false)`
   turns it off
 - `post(String path, Function handler, ApiSettings... settings)` — fluent
-- `stream(String path, ...)` — streaming endpoint
+- `post(String path, BiFunction<Object, Request, Object> handler, ...)` —
+  the handler also gets the `Request`: `caller()` (who is calling, from the
+  hub's `context.hub.caller`: `key`, `deviceId`, `deviceName`, `groups`,
+  `owner`, and `via`/`claimed` through a merged hub; null on hubs that don't
+  send it), `hubKey()` and the whole `context()`
+- `stream(String path, ...)` — streaming endpoint (also with a `(body, request)` handler)
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
 - `send(String path, Object body)` — client call through the hub
 - `values(String path, Object body)` — stream call through the hub

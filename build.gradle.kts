@@ -20,6 +20,8 @@ dependencies {
   implementation("v57.channel:channel-java-core")
   implementation("v57.channel:channel-java-client")
 
+  // A fake hub for the end-to-end auth/device/caller test.
+  testImplementation("v57.channel:channel-java-server")
   testImplementation(platform("org.junit:junit-bom:5.10.2"))
   testImplementation("org.junit.jupiter:junit-jupiter")
   testRuntimeOnly("org.junit.platform:junit-platform-launcher")
