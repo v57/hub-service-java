@@ -73,6 +73,40 @@ class FakeHubTest {
   }
 
   @Test
+  void connectsWhenTheHubStartsLate() throws Exception {
+    int port;
+    try (var probe = new java.net.ServerSocket(0)) {
+      port = probe.getLocalPort();
+    }
+    Keychain.setKeyPath(tmp.resolve("auth").toString());
+    service = new Service(new ServiceOptions().address("ws://127.0.0.1:" + port).device(false));
+    service.post("echo", body -> body);
+    service.start();
+    Thread.sleep(500);
+
+    var updates = new CopyOnWriteArrayList<Object>();
+    var hub = new Channel<Map<String, String>>()
+        .post("hub/service/update", Object.class, Object.class, request -> {
+          updates.add(request.body());
+          return null;
+        });
+    server = hub.listen(port, new ListenOptions<>());
+    serverThread = new Thread(() -> {
+      while (running) {
+        server.poll();
+        try {
+          Thread.sleep(1);
+        } catch (InterruptedException e) {
+          return;
+        }
+      }
+    });
+    serverThread.setDaemon(true);
+    serverThread.start();
+    await(() -> !updates.isEmpty());
+  }
+
+  @Test
   void pinsHubKeyReconnectsWithV1AndSeesTheCaller() throws Exception {
     List<Map<String, String>> connects = new CopyOnWriteArrayList<>();
     var latest = new AtomicReference<Sender<Map<String, String>>>();

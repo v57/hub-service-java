@@ -52,6 +52,12 @@ import java.util.function.Supplier;
  */
 public final class Service {
   private static final long POLL_INTERVAL_MS = 10;
+  /**
+   * A dial that hasn't connected by then is dropped and redialed: the
+   * channel-java client fails a refused upgrade (hub-pro answers a bad token
+   * with HTTP 401) or a refused TCP connect without telling its owner.
+   */
+  private static final long CONNECT_TIMEOUT_MS = 3000;
   private static final TypeRef<Object> ANY = TypeRef.of(Object.class);
 
   private final Channel<Object> channel = new Channel<>();
@@ -78,6 +84,8 @@ public final class Service {
   private volatile boolean started;
   private volatile boolean stopped;
   private boolean wasConnected;
+  private Map<String, String> dialHeaders;
+  private long dialedAt;
   private Thread pollThread;
 
   /** Creates a Service. Options are optional; the first one wins. */
@@ -180,7 +188,7 @@ public final class Service {
     return deviceKey;
   }
 
-  /** The last connect error (e.g. a v1 connect refused with {@code invalid signature}), or null. */
+  /** The last connect error (e.g. a v1 connect the hub refused with HTTP 401), or null. */
   public String lastError() {
     return lastError;
   }
@@ -426,6 +434,8 @@ public final class Service {
       client = current;
       sender = current.sender();
       wasConnected = false;
+      dialHeaders = headers;
+      dialedAt = System.currentTimeMillis();
     }
     current.poll();
     var connected = current.isConnected();
@@ -438,6 +448,10 @@ public final class Service {
         return;
       }
       sendUpdates(current.sender());
+    } else if (!connected && !wasConnected && System.currentTimeMillis() - dialedAt > CONNECT_TIMEOUT_MS) {
+      reportConnectError(dialHeaders, new IllegalStateException("not connected after " + CONNECT_TIMEOUT_MS
+          + " ms (the hub is down or refused the connect)"));
+      disposeClient();
     } else if (!connected && wasConnected) {
       // Connection dropped (hub removes our services on disconnect): the
       // channel-java client does not reconnect, so dispose it and reconnect.
@@ -490,10 +504,11 @@ public final class Service {
     for (var cause = error.getCause(); cause != null; cause = cause.getCause()) {
       message += ": " + cause.getMessage();
     }
-    if ("1".equals(headers.get("v")) && message.contains("invalid signature") && !message.equals(lastError)) {
-      System.err.println("hub-service: the hub at " + addressKey() + " refused the v1 token for hub key "
-          + hubKey + " (invalid signature). The hub key changed or a different server answers;"
-          + " call forgetHubKey() if the change is expected.");
+    // hub-pro refuses a bad token with HTTP 401, which the client doesn't surface, and its reason
+    // (invalid signature, key revoked) stays on the hub; so any failed v1 dial is reported once.
+    if ("1".equals(headers.get("v")) && !message.equals(lastError)) {
+      System.err.println("hub-service: v1 connect to " + addressKey() + " (hub key " + hubKey + ") failed: "
+          + message + ". If the hub key changed or a different server answers, call forgetHubKey().");
     }
     lastError = message;
   }
