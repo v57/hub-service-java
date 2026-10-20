@@ -23,8 +23,8 @@ import java.util.Base64;
  *   <li>A signed token has the shape {@code key.<pub>.<sig>.<expiry>} where:
  *       pub = base64 of the 44-byte SPKI public key (bytes 48..92 of the
  *       file), sig = base64 ed25519 signature over the expiry string, expiry
- *       = DECIMAL epoch-seconds string of now + 10 (TS parity; hub-pro reads
- *       it as base-36, so the decimal form never trips the expiry check).
+ *       = DECIMAL epoch-seconds string of now + 10 (TS parity; hub-pro
+ *       rejects it once expired or if over 5 minutes ahead).
  * </ul>
  *
  * <p>The hub verifies the signature against the embedded public key and
