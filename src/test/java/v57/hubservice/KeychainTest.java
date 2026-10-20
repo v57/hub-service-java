@@ -52,10 +52,10 @@ class KeychainTest {
     assertTrue(verifier.verify(Base64.getDecoder().decode(parts[2])),
         "signature must verify against the token's public key");
 
-    // expiry is the decimal epoch-seconds string of now + 10 (TS parity).
+    // expiry is the decimal epoch-seconds string of now + 60 (protocol.md).
     var expiry = Long.parseLong(parts[3]);
     var now = System.currentTimeMillis() / 1000;
-    assertTrue(expiry >= now + 9 && expiry <= now + 11, "unexpected expiry: " + expiry);
+    assertTrue(expiry >= now + 59 && expiry <= now + 61, "unexpected expiry: " + expiry);
   }
 
   @Test

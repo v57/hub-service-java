@@ -4,6 +4,7 @@ build/
 *.iml
 .DS_Store
 auth
+hubs.json
 CLAUDE.md
 /.claude
 

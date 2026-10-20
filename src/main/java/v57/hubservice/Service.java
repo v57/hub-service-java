@@ -23,11 +23,19 @@ import java.util.function.Supplier;
  * API endpoints, and call API through the hub.
  *
  * <p>Port of hub-service (TS reference). On every (re)connect the connection
- * carries hub-pro auth headers {@code auth: <fresh sign()>} and {@code v: 0}
- * (fresh token per connect; hub-lite ignores them), then
- * {@code hub/profile/update} (if a profile is set) and
+ * carries hub-pro auth headers {@code auth} (a fresh token per connect) and
+ * {@code v}, then {@code hub/profile/update} (if a profile is set) and
  * {@code hub/service/update} are re-sent, because the hub drops services on
- * disconnect.
+ * disconnect. hub-lite ignores the headers.
+ *
+ * <p>Hub-bound auth ({@code Docs/Devices/protocol.md} section 2): with no
+ * pinned key for the address, the service connects with {@code v: 0}, calls
+ * {@code hub/info}, pins the returned key in {@code hubs.json} beside the key
+ * file and reconnects at once with {@code v: 1} tokens signed over
+ * {@code hub1:<hub key>:<expiry>}. A hub that doesn't answer
+ * {@code hub/info} (hub-lite) keeps getting v0. A refused v1 connect is
+ * reported ({@link #lastError()}), never silently downgraded; call
+ * {@link #forgetHubKey()} when the hub key really changed.
  *
  * <p>The channel-java client has no onConnect callback and does not reconnect
  * by itself, so {@link #start()} runs a daemon poll thread that detects the
@@ -41,6 +49,9 @@ public final class Service {
   private final Object address;
   private final Profile profile;
   private final Supplier<String> sign;
+  private final HubPins pins;
+  private volatile String hubKey;
+  private volatile String lastError;
   private final List<AppHeader> apps = new ArrayList<>();
   /** Every registered handler path (post, stream, app), registration order. */
   private final LinkedHashSet<String> paths = new LinkedHashSet<>();
@@ -70,7 +81,63 @@ public final class Service {
     } else {
       this.profile = null;
     }
-    this.sign = opts.sign != null ? opts.sign : Keychain::sign;
+    this.sign = opts.sign;
+    this.pins = opts.sign == null ? HubPins.beside(Keychain.keyPath()) : null;
+    this.hubKey = opts.hubKey != null ? opts.hubKey : (pins != null ? pins.get(addressKey()) : null);
+  }
+
+  /** The hub key v1 tokens are bound to, or null while connecting with v0. */
+  public String hubKey() {
+    return hubKey;
+  }
+
+  /**
+   * Clears the pinned hub key for this address, so the next connect uses v0
+   * and pins whatever key {@code hub/info} returns. Use it when a hub's key
+   * changed on purpose.
+   */
+  public void forgetHubKey() {
+    hubKey = null;
+    if (pins != null) {
+      pins.remove(addressKey());
+    }
+  }
+
+  /** The last connect error (e.g. a v1 connect refused with {@code invalid signature}), or null. */
+  public String lastError() {
+    return lastError;
+  }
+
+  /** The address as {@code hubs.json} keys it ({@link #normalizeAddress(Object)}). */
+  public String addressKey() {
+    return normalizeAddress(address);
+  }
+
+  /**
+   * Normalizes a hub address like channel TS does (protocol.md section 2): a
+   * bare port becomes {@code ws://localhost:<port>}; a URL keeps its form with
+   * the scheme and host lowercased and no trailing slash.
+   */
+  public static String normalizeAddress(Object address) {
+    if (address instanceof Integer port) {
+      return "ws://localhost:" + port;
+    }
+    var text = String.valueOf(address).trim();
+    if (text.matches("\\d+")) {
+      return "ws://localhost:" + text;
+    }
+    var schemeEnd = text.indexOf("://");
+    if (schemeEnd >= 0) {
+      var authorityEnd = text.indexOf('/', schemeEnd + 3);
+      if (authorityEnd < 0) {
+        authorityEnd = text.length();
+      }
+      text = text.substring(0, authorityEnd).toLowerCase(java.util.Locale.ROOT) + text.substring(authorityEnd);
+    }
+    while (text.endsWith("/")) {
+      text = text.substring(0, text.length() - 1);
+    }
+    return text;
   }
 
   /** The configured profile (null when neither name nor icon was set). */
@@ -248,7 +315,13 @@ public final class Service {
   private void step() {
     var current = client;
     if (current == null) {
-      current = channel.connect(addressString(), new ConnectOptions<>(null, authHeaders()));
+      var headers = authHeaders();
+      try {
+        current = channel.connect(addressString(), new ConnectOptions<>(null, headers));
+      } catch (RuntimeException error) {
+        reportConnectError(headers, error);
+        throw error;
+      }
       client = current;
       sender = current.sender();
       wasConnected = false;
@@ -257,6 +330,12 @@ public final class Service {
     var connected = current.isConnected();
     if (connected && !wasConnected) {
       wasConnected = true;
+      lastError = null;
+      if (learnHubKey(current.sender())) {
+        // Pinned the hub key: reconnect at once with a v1 token.
+        disposeClient();
+        return;
+      }
       sendUpdates(current.sender());
     } else if (!connected && wasConnected) {
       // Connection dropped (hub removes our services on disconnect): the
@@ -279,6 +358,45 @@ public final class Service {
     }
   }
 
+  /**
+   * On a v0 connection with no pinned key, asks {@code hub/info} for the hub
+   * key and pins it. Returns true when a key was newly pinned.
+   */
+  private boolean learnHubKey(Sender<Object> s) {
+    if (pins == null || hubKey != null) {
+      return false;
+    }
+    CallResult<Object> result;
+    try {
+      result = s.send("hub/info");
+    } catch (RuntimeException error) {
+      return false;
+    }
+    if (!result.isOk() || !(result.value() instanceof Map<?, ?> info) || !(info.get("key") instanceof String key)) {
+      return false; // hub-lite or an older hub-pro: stay on v0.
+    }
+    hubKey = key;
+    try {
+      pins.put(addressKey(), key);
+    } catch (RuntimeException error) {
+      // Unwritable pin file: keep the key for this process only.
+    }
+    return true;
+  }
+
+  private void reportConnectError(Map<String, String> headers, RuntimeException error) {
+    var message = String.valueOf(error.getMessage());
+    for (var cause = error.getCause(); cause != null; cause = cause.getCause()) {
+      message += ": " + cause.getMessage();
+    }
+    if ("1".equals(headers.get("v")) && message.contains("invalid signature") && !message.equals(lastError)) {
+      System.err.println("hub-service: the hub at " + addressKey() + " refused the v1 token for hub key "
+          + hubKey + " (invalid signature). The hub key changed or a different server answers;"
+          + " call forgetHubKey() if the change is expected.");
+    }
+    lastError = message;
+  }
+
   private void sendUpdates(Sender<Object> s) {
     if (profile != null) {
       s.send("hub/profile/update", profile.toMap());
@@ -289,11 +407,24 @@ public final class Service {
   /**
    * Fresh hub-pro auth headers for a connect: {@code auth} is a fresh signed
    * token ({@code key.<pub>.<sig>.<expiry>}) and {@code v} is the protocol
-   * version. Built once per connect, so every (re)connect gets a fresh token.
-   * hub-lite ignores both headers.
+   * version: {@code 1} with a token bound to the pinned hub key, else
+   * {@code 0}. Built once per connect, so every (re)connect gets a fresh
+   * token. hub-lite ignores the headers.
    */
-  private Map<String, String> authHeaders() {
-    return Map.of("auth", sign.get(), "v", "0");
+  Map<String, String> authHeaders() {
+    var headers = new LinkedHashMap<String, String>();
+    var key = hubKey;
+    if (sign != null) {
+      headers.put("auth", sign.get());
+      headers.put("v", "0");
+    } else if (key != null) {
+      headers.put("auth", Keychain.signHub(key));
+      headers.put("v", "1");
+    } else {
+      headers.put("auth", Keychain.sign());
+      headers.put("v", "0");
+    }
+    return headers;
   }
 
   private String addressString() {

@@ -61,9 +61,14 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
 
 - `Service(ServiceOptions)` — `ServiceOptions(String name, Map<String,Object> icon)`,
   default address 1997 or `HUB` env
-- `Keychain` — `sign()` → `key.<pub>.<sig>.<expiry>` token, `publicKey()`,
-  `setKeyPath(...)`; loads/generates the `auth` file (default `auth` in cwd or
-  `$HUBKEY`); attached as the `auth` header on every (re)connect
+- `Keychain` — `sign()` → `key.<pub>.<sig>.<expiry>` token, `signHub(hubKey)`
+  (v1, bound to one hub), `publicKey()`, `setKeyPath(...)`; loads/generates
+  the `auth` file (default `auth` in cwd or `$HUBKEY`); attached as the
+  `auth` header on every (re)connect
+- Hub-bound auth: the first connect uses `v: 0`, asks `hub/info` for the hub
+  key, pins it in `hubs.json` beside the key file and reconnects with `v: 1`
+  (`ServiceOptions.hubKey(...)` supplies it up front, `forgetHubKey()` clears
+  the pin, `lastError()` reports a refused connect)
 - `post(String path, Function handler, ApiSettings... settings)` — fluent
 - `stream(String path, ...)` — streaming endpoint
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
