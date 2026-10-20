@@ -37,6 +37,12 @@ import java.util.function.Supplier;
  * reported ({@link #lastError()}), never silently downgraded; call
  * {@link #forgetHubKey()} when the hub key really changed.
  *
+ * <p>Device mode (protocol.md section 3, on by default): every connect also
+ * carries a {@code device} header, a certificate for the service key signed
+ * by the device key. It is created at connect when missing or with less than
+ * 24 hours left (7-day lifetime). A device key that can't be read or created
+ * turns device mode off for this service.
+ *
  * <p>The channel-java client has no onConnect callback and does not reconnect
  * by itself, so {@link #start()} runs a daemon poll thread that detects the
  * {@code isConnected} false→true transition per connection (and re-establishes
@@ -52,6 +58,12 @@ public final class Service {
   private final HubPins pins;
   private volatile String hubKey;
   private volatile String lastError;
+  private final ServiceOptions options;
+  private volatile boolean deviceMode;
+  private KeyFile deviceKey;
+  private String certificate;
+  private long certificateExpiry;
+  private String deviceName;
   private final List<AppHeader> apps = new ArrayList<>();
   /** Every registered handler path (post, stream, app), registration order. */
   private final LinkedHashSet<String> paths = new LinkedHashSet<>();
@@ -68,6 +80,9 @@ public final class Service {
   /** Creates a Service. Options are optional; the first one wins. */
   public Service(ServiceOptions... options) {
     var opts = options.length > 0 ? options[0] : new ServiceOptions();
+    this.options = opts;
+    // A custom token supplier hides the service key the certificate must name.
+    this.deviceMode = opts.device && opts.sign == null;
     if (opts.address != null) {
       this.address = opts.address;
     } else {
@@ -101,6 +116,65 @@ public final class Service {
     if (pins != null) {
       pins.remove(addressKey());
     }
+  }
+
+  /**
+   * The instance name the certificate carries: the option, else the profile
+   * name, else the first segment of the first registered path, else
+   * {@code service}.
+   */
+  public String instance() {
+    if (options.instance != null && !options.instance.isEmpty()) {
+      return options.instance;
+    }
+    if (profile != null && profile.name() != null && !profile.name().isEmpty()) {
+      return profile.name();
+    }
+    synchronized (lock) {
+      if (!paths.isEmpty()) {
+        return paths.iterator().next().split("/")[0];
+      }
+    }
+    return "service";
+  }
+
+  /**
+   * The {@code device} header for the next connect, or null with device mode
+   * off. Reuses the current certificate while it has more than 24 hours left.
+   */
+  synchronized String deviceHeader() {
+    if (!deviceMode) {
+      return null;
+    }
+    try {
+      if (deviceKey == null) {
+        deviceKey = options.deviceKey != null
+            ? options.deviceKey
+            : Device.loadOrCreateKey(options.deviceKeyPath != null
+                ? java.nio.file.Path.of(options.deviceKeyPath) : Device.defaultKeyPath());
+      }
+      var now = Keychain.now();
+      if (certificate == null || certificateExpiry - now < Device.RENEW_BEFORE) {
+        if (deviceName == null) {
+          deviceName = options.deviceName != null ? options.deviceName : Device.defaultName();
+        }
+        var platform = options.platform != null ? options.platform : Device.defaultPlatform();
+        var exp = now + Device.CERTIFICATE_LIFETIME;
+        certificate = Device.certificate(deviceKey, Device.certificatePayload(
+            deviceKey.publicKey(), Keychain.publicKey(), instance(), deviceName, platform, options.parent, now, exp));
+        certificateExpiry = exp;
+      }
+      return certificate;
+    } catch (RuntimeException error) {
+      System.err.println("hub-service: device mode off: " + error.getMessage());
+      deviceMode = false;
+      return null;
+    }
+  }
+
+  /** The device key in use, or null before the first connect or with device mode off. */
+  public synchronized KeyFile deviceKey() {
+    return deviceKey;
   }
 
   /** The last connect error (e.g. a v1 connect refused with {@code invalid signature}), or null. */
@@ -423,6 +497,10 @@ public final class Service {
     } else {
       headers.put("auth", Keychain.sign());
       headers.put("v", "0");
+    }
+    var device = deviceHeader();
+    if (device != null) {
+      headers.put("device", device);
     }
     return headers;
   }

@@ -49,7 +49,7 @@ class HubAuthTest {
   @Test
   void connectsWithV0UntilAHubKeyIsKnown() {
     Keychain.setKeyPath(tmp.resolve("auth").toString());
-    var service = new Service(new ServiceOptions().address(4100));
+    var service = new Service(new ServiceOptions().address(4100).device(false));
     assertNull(service.hubKey());
     var headers = service.authHeaders();
     assertEquals("0", headers.get("v"));
@@ -58,7 +58,7 @@ class HubAuthTest {
   @Test
   void hubKeyOptionSignsV1() throws Exception {
     Keychain.setKeyPath(tmp.resolve("auth").toString());
-    var service = new Service(new ServiceOptions().address(4100).hubKey(HUB_KEY));
+    var service = new Service(new ServiceOptions().address(4100).device(false).hubKey(HUB_KEY));
     var headers = service.authHeaders();
     assertEquals("1", headers.get("v"));
     var parts = headers.get("auth").split("\\.");
@@ -71,7 +71,7 @@ class HubAuthTest {
     new HubPins(tmp.resolve("hubs.json")).put("ws://localhost:4100", HUB_KEY);
     assertEquals("{\"ws://localhost:4100\":\"" + HUB_KEY + "\"}", Files.readString(tmp.resolve("hubs.json")));
 
-    var service = new Service(new ServiceOptions().address(4100));
+    var service = new Service(new ServiceOptions().address(4100).device(false));
     assertEquals(HUB_KEY, service.hubKey());
     assertEquals("1", service.authHeaders().get("v"));
 

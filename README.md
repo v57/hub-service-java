@@ -69,6 +69,14 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
   key, pins it in `hubs.json` beside the key file and reconnects with `v: 1`
   (`ServiceOptions.hubKey(...)` supplies it up front, `forgetHubKey()` clears
   the pin, `lastError()` reports a refused connect)
+- Device mode (on by default): every connect also sends a `device` header, a
+  7-day certificate for the service key signed by the device key
+  (`~/.hub/device.key`, `$HUB_DEVICE_KEY` or `ServiceOptions.deviceKeyPath`,
+  created 0600; `deviceKey(KeyFile)` for a key kept elsewhere), renewed at
+  connect with less than a day left. `instance(...)` names the service on its
+  device (default: profile name, else first path segment, else `service`);
+  `deviceName`, `platform`, `parent` override the suggestions; `device(false)`
+  turns it off
 - `post(String path, Function handler, ApiSettings... settings)` — fluent
 - `stream(String path, ...)` — streaming endpoint
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
