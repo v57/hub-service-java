@@ -86,6 +86,14 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
   send it, and unless the request's `context.hub.hubKey` is the pinned hub
   key), `hubKey()` and the whole `context()`
 - `stream(String path, ...)` — streaming endpoint (also with a `(body, request)` handler)
+- Hub Network shares (TS `publishShare` parity): `share(name, protocol, host,
+  port, policy)` declares one before `start()` (republished on every
+  connect); `publishShare(...)`, `updateShare(name, policy, port)` and
+  `removeShare(name)` change the set at runtime. The local hub-net agent
+  attests each share over its Unix socket (`$HUB_NET_AGENT_SOCKET`, else
+  `/var/run/hub-net/agent.sock` on macOS, `/run/hub-net/agent.sock` on Linux;
+  `network().agentSocket(...)` overrides it), then the set goes to the hub
+  with `network/shares/replace`. `network().publications()` lists the results
 - `app(App)` — register app header + `AppInterface` stream at `header.path`
 - `send(String path, Object body)` — client call through the hub
 - `values(String path, Object body)` — stream call through the hub

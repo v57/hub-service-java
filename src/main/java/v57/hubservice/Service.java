@@ -73,6 +73,7 @@ public final class Service {
   private String certificate;
   private long certificateExpiry;
   private String deviceName;
+  private final NetworkPublisher network = new NetworkPublisher();
   private final List<AppHeader> apps = new ArrayList<>();
   /** Every registered handler path (post, stream, app), registration order. */
   private final LinkedHashSet<String> paths = new LinkedHashSet<>();
@@ -280,6 +281,62 @@ public final class Service {
     var iface = app.interfaceMap();
     channel.stream(app.header().path, Object.class, Object.class, request -> ChannelStreams.fromIterable(List.of(iface)));
     return this;
+  }
+
+  /** Hub Network share publication: agent socket settings and the current publications. */
+  public NetworkPublisher network() {
+    return network;
+  }
+
+  /**
+   * Declares a Hub Network share before {@link #start()}: the local
+   * {@code host:port} is published under {@code name} on connect and after
+   * every reconnect. {@code policy} is {@code {"mode": "hub" | "private" |
+   * "disabled"}}, {@code {"mode": "group", "group": ..}} or
+   * {@code {"mode": "keys", "keys": [..]}}; null means private.
+   */
+  public Service share(String name, String protocol, String host, int port, Map<String, Object> policy) {
+    network.declare(new NetworkPublisher.Share(name, protocol, host, port, policyOrPrivate(policy)));
+    return this;
+  }
+
+  /**
+   * Publishes a Hub Network share now (TS {@code publishShare}): the local
+   * hub-net agent attests the port, then the declared set goes to the hub.
+   * Returns every current publication. Requires {@link #start()}.
+   */
+  public List<Map<String, Object>> publishShare(
+      String name, String protocol, String host, int port, Map<String, Object> policy) {
+    return network.publish(new NetworkPublisher.Share(name, protocol, host, port, policyOrPrivate(policy)),
+        shareKey(), this::replaceShares);
+  }
+
+  /** Changes a published share's policy and/or port (null keeps the current one) and republishes. */
+  public List<Map<String, Object>> updateShare(String name, Map<String, Object> policy, Integer port) {
+    var current = network.declaredShares().stream().filter(share -> share.name().equals(name)).findFirst()
+        .orElseThrow(() -> new IllegalArgumentException("Share '" + name + "' not found"));
+    return network.publish(new NetworkPublisher.Share(name, current.protocol(), current.host(),
+        port != null ? port : current.port(), policy != null ? policy : current.policy()), shareKey(), this::replaceShares);
+  }
+
+  /** Removes a share and republishes the rest. */
+  public List<Map<String, Object>> removeShare(String name) {
+    return network.remove(name, shareKey(), this::replaceShares);
+  }
+
+  private static Map<String, Object> policyOrPrivate(Map<String, Object> policy) {
+    return policy != null ? policy : Map.of("mode", "private");
+  }
+
+  private KeyFile shareKey() {
+    if (sign != null) {
+      throw new IllegalStateException("Share publication needs the keychain service key, not a custom sign");
+    }
+    return Keychain.key();
+  }
+
+  private Object replaceShares(Object body) {
+    return send("network/shares/replace", body);
   }
 
   /** Calls an API through the hub (client side). Requires {@link #start()}. */
@@ -514,6 +571,13 @@ public final class Service {
       s.send("hub/profile/update", profile.toMap());
     }
     s.send("hub/service/update", update());
+    if (network.hasShares() && sign == null) {
+      try {
+        network.republishAll(Keychain.key(), body -> s.send("network/shares/replace", body).requireValue());
+      } catch (RuntimeException error) {
+        System.err.println("hub-service: failed to republish network shares: " + error.getMessage());
+      }
+    }
   }
 
   /**
