@@ -8,7 +8,7 @@ import java.util.function.Supplier;
  * <p>{@code address} is a port (Integer) or a ws:// URL (String). Default:
  * {@code 1997} or the {@code HUB} environment variable. {@code name} is the
  * profile name shown in the hub. {@code icon} is a String or a
- * {@code {"symbol": .., "text": ..}} map. {@code sign} supplies the hub-pro
+ * {@code {"symbol": .., "text": ..}} map. {@code sign} supplies the hub-server
  * auth token for each connect (default: the keychain — the {@code auth} key
  * file in the cwd, or {@code $HUBKEY} — signing v1 tokens bound to the hub
  * key once it is pinned; a custom supplier always connects with {@code v: 0}).
@@ -31,7 +31,7 @@ public final class ServiceOptions {
   public String name;
   /** Profile icon: a String or a {@code {"symbol": .., "text": ..}} map. */
   public Object icon;
-  /** Hub-pro auth token supplier, called once per (re)connect. Null = the keychain (v1 once pinned). */
+  /** hub-server auth token supplier, called once per (re)connect. Null = the keychain (v1 once pinned). */
   public Supplier<String> sign;
   /** The hub's SPKI, if known up front. Null = learn and pin it via {@code hub/info}. */
   public String hubKey;

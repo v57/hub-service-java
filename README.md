@@ -8,7 +8,7 @@ Java port of [hub-service](https://github.com/v57/hub-service) — connect to a
 your own post/stream API endpoints, register apps, and call API through the hub.
 
 The wire contract matches the TS reference (`hub/profile/update`,
-`hub/service/update`, AppInterface + element DSL). Hub-pro auth is supported:
+`hub/service/update`, AppInterface + element DSL). hub-server auth is supported:
 every (re)connect sends `auth` + `v` headers signed by the ed25519 keychain
 (`auth` key file in the cwd — or `$HUBKEY`; generated if missing), exactly
 like the TS `hub-service/keychain.ts`. hub-lite ignores the headers.

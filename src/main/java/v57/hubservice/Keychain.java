@@ -4,9 +4,9 @@ import java.nio.file.Path;
 
 /**
  * ed25519 keychain: load-or-generate the {@code auth} key file and sign
- * hub-pro auth tokens.
+ * hub-server auth tokens.
  *
- * <p>Hub-pro auth parity with the TS reference ({@code hub-service/keychain.ts})
+ * <p>hub-server auth parity with the TS reference ({@code hub-service/keychain.ts})
  * and {@code Docs/Devices/protocol.md} section 2:
  *
  * <ul>
@@ -19,7 +19,7 @@ import java.nio.file.Path;
  *       epoch-seconds string of now + 60, and sig = base64 ed25519 signature
  *       over {@code <expiry>} (header {@code v: 0}) or over
  *       {@code hub1:<hub SPKI>:<expiry>} (header {@code v: 1}, bound to one
- *       hub). hub-pro allows 30 seconds of clock skew and at most 300 seconds
+ *       hub). hub-server allows 30 seconds of clock skew and at most 300 seconds
  *       ahead.
  * </ul>
  *

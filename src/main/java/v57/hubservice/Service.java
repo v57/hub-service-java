@@ -21,11 +21,11 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Lets a Java process connect to a hub (hub-lite/hub-pro), host post/stream
+ * Lets a Java process connect to a hub (hub-lite/hub-server), host post/stream
  * API endpoints, and call API through the hub.
  *
  * <p>Port of hub-service (TS reference). On every (re)connect the connection
- * carries hub-pro auth headers {@code auth} (a fresh token per connect) and
+ * carries hub-server auth headers {@code auth} (a fresh token per connect) and
  * {@code v}, then {@code hub/profile/update} (if a profile is set) and
  * {@code hub/service/update} are re-sent, because the hub drops services on
  * disconnect. hub-lite ignores the headers.
@@ -54,7 +54,7 @@ public final class Service {
   private static final long POLL_INTERVAL_MS = 10;
   /**
    * A dial that hasn't connected by then is dropped and redialed: the
-   * channel-java client fails a refused upgrade (hub-pro answers a bad token
+   * channel-java client fails a refused upgrade (hub-server answers a bad token
    * with HTTP 401) or a refused TCP connect without telling its owner.
    */
   private static final long CONNECT_TIMEOUT_MS = 3000;
@@ -557,7 +557,7 @@ public final class Service {
     for (var cause = error.getCause(); cause != null; cause = cause.getCause()) {
       message += ": " + cause.getMessage();
     }
-    // hub-pro refuses a bad token with HTTP 401, which the client doesn't surface, and its reason
+    // hub-server refuses a bad token with HTTP 401, which the client doesn't surface, and its reason
     // (invalid signature, key revoked) stays on the hub; so any failed v1 dial is reported once.
     if ("1".equals(headers.get("v")) && !message.equals(lastError)) {
       System.err.println("hub-service: v1 connect to " + addressKey() + " (hub key " + hubKey + ") failed: "
@@ -581,7 +581,7 @@ public final class Service {
   }
 
   /**
-   * Fresh hub-pro auth headers for a connect: {@code auth} is a fresh signed
+   * Fresh hub-server auth headers for a connect: {@code auth} is a fresh signed
    * token ({@code key.<pub>.<sig>.<expiry>}) and {@code v} is the protocol
    * version: {@code 1} with a token bound to the pinned hub key, else
    * {@code 0}. Built once per connect, so every (re)connect gets a fresh
