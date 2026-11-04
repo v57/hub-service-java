@@ -57,7 +57,11 @@ class VectorsTest {
   void deviceIdAndSafetyCode() {
     var device = at("keys", "device");
     assertEquals(device.get("deviceId"), Device.id((String) device.get("publicKey")));
-    assertEquals(device.get("safetyCode"), Device.safetyCode((String) device.get("publicKey")));
+    @SuppressWarnings("unchecked")
+    var cases = (java.util.List<java.util.Map<String, Object>>) at("safetyCode").get("cases");
+    for (var code : cases) {
+      assertEquals(code.get("code"), Device.safetyCode((String) code.get("hubKey"), (String) code.get("deviceKey"), (String) code.get("codeValue")));
+    }
   }
 
   @Test

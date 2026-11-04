@@ -53,8 +53,15 @@ public final class Device {
   }
 
   /** The safety code shown while approving: {@code "ddd ddd"}. */
-  public static String safetyCode(String publicKey) {
-    var hex = HexFormat.of().formatHex(digest(publicKey)).substring(0, 8);
+  public static String safetyCode(String hubKey, String deviceKey, String codeValue) {
+    byte[] hash;
+    try {
+      hash = java.security.MessageDigest.getInstance("SHA-256")
+          .digest(("hubcode1:" + hubKey + ":" + deviceKey + ":" + codeValue).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
+    var hex = HexFormat.of().formatHex(hash).substring(0, 8);
     var code = String.format("%06d", Long.parseLong(hex, 16) % 1_000_000);
     return code.substring(0, 3) + " " + code.substring(3);
   }
