@@ -18,26 +18,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
- * Lets a Java process connect to a hub (hub-lite/hub-server), host post/stream
+ * Lets a Java process connect to a hub (hub-server), host post/stream
  * API endpoints, and call API through the hub.
  *
  * <p>Port of hub-service (TS reference). On every (re)connect the connection
  * carries hub-server auth headers {@code auth} (a fresh token per connect) and
  * {@code v}, then {@code hub/profile/update} (if a profile is set) and
  * {@code hub/service/update} are re-sent, because the hub drops services on
- * disconnect. hub-lite ignores the headers.
+ * disconnect.
  *
- * <p>Hub-bound auth ({@code Docs/Devices/protocol.md} section 2): with no
- * pinned key for the address, the service connects with {@code v: 0}, calls
- * {@code hub/info}, pins the returned key in {@code hubs.json} beside the key
- * file and reconnects at once with {@code v: 1} tokens signed over
- * {@code hub1:<hub key>:<expiry>}. A hub that doesn't answer
- * {@code hub/info} (hub-lite) keeps getting v0. A refused v1 connect is
- * reported ({@link #lastError()}), never silently downgraded; call
- * {@link #forgetHubKey()} when the hub key really changed.
+ * <p>Auth v2 ({@code Docs/Devices/protocol.md} section 2): before every connect
+ * the service asks {@code hub/info} on a short anonymous connection with a fresh
+ * nonce. Only an answer with a valid proof of the key it claims gets a token, over
+ * that answer's challenge; the first proven key is pinned in {@code hubs.json}
+ * beside the key file. A hub that doesn't prove its key, or answers with another
+ * than the pinned one, gets nothing and is reported ({@link #lastError()}) while
+ * the service keeps trying with a growing delay, and calls wait. Call
+ * {@link #forgetHubKey()} when the hub key really changed. Plain {@code ws://}
+ * beyond loopback, the overlay and the LAN isn't dialed unless
+ * {@code allowPlaintext} says so.
  *
  * <p>Device mode (protocol.md section 3, on by default): every connect also
  * carries a {@code device} header, a certificate for the service key signed
@@ -58,15 +59,23 @@ public final class Service {
    * with HTTP 401) or a refused TCP connect without telling its owner.
    */
   private static final long CONNECT_TIMEOUT_MS = 3000;
+  /** Bounds the {@code hub/info} question before a connect. */
+  private static final long HUB_INFO_TIMEOUT_MS = 5000;
+  /** Retry delays for a hub that doesn't prove its key, or can't be reached. */
+  private static final long HANDSHAKE_RETRY_MS = 1000;
+  private static final long HANDSHAKE_MAX_RETRY_MS = 30_000;
   private static final TypeRef<Object> ANY = TypeRef.of(Object.class);
 
   private final Channel<Object> channel = new Channel<>();
   private final Object address;
   private final Profile profile;
-  private final Supplier<String> sign;
+  private final BiFunction<String, String, String> sign;
   private final HubPins pins;
+  private final boolean allowPlaintext;
   private volatile String hubKey;
   private volatile String lastError;
+  /** Why {@link #start()} dialed nothing. */
+  private volatile String refusal;
   private final ServiceOptions options;
   private volatile boolean deviceMode;
   private KeyFile deviceKey;
@@ -85,7 +94,6 @@ public final class Service {
   private volatile boolean started;
   private volatile boolean stopped;
   private boolean wasConnected;
-  private Map<String, String> dialHeaders;
   private long dialedAt;
   private Thread pollThread;
 
@@ -109,25 +117,23 @@ public final class Service {
       this.profile = null;
     }
     this.sign = opts.sign;
-    this.pins = opts.sign == null ? HubPins.beside(Keychain.keyPath()) : null;
-    this.hubKey = opts.hubKey != null ? opts.hubKey : (pins != null ? pins.get(addressKey()) : null);
+    this.allowPlaintext = opts.allowPlaintext || "1".equals(System.getenv("HUB_ALLOW_PLAINTEXT"));
+    this.pins = HubPins.beside(Keychain.keyPath());
+    this.hubKey = opts.hubKey != null ? opts.hubKey : pins.get(addressKey());
   }
 
-  /** The hub key v1 tokens are bound to, or null while connecting with v0. */
+  /** The hub key this address is pinned to, or null until a hub proved one. */
   public String hubKey() {
     return hubKey;
   }
 
   /**
-   * Clears the pinned hub key for this address, so the next connect uses v0
-   * and pins whatever key {@code hub/info} returns. Use it when a hub's key
-   * changed on purpose.
+   * Clears the pinned hub key for this address, so the next connect pins what
+   * the hub proves. Use it when a hub's key changed on purpose.
    */
   public void forgetHubKey() {
     hubKey = null;
-    if (pins != null) {
-      pins.remove(addressKey());
-    }
+    pins.remove(addressKey());
   }
 
   /**
@@ -184,7 +190,7 @@ public final class Service {
     return deviceKey;
   }
 
-  /** The last connect error (e.g. a v1 connect the hub refused with HTTP 401), or null. */
+  /** The last connect error (a hub that didn't prove its key, a connect it refused with HTTP 401), or null. */
   public String lastError() {
     return lastError;
   }
@@ -367,6 +373,13 @@ public final class Service {
    * (re)connect the profile update (if set) and the service update are sent.
    */
   public Service start() {
+    refusal = null;
+    if (!allowPlaintext && HubTransport.of(address) == HubTransport.REFUSED) {
+      refusal = addressKey() + " would carry this service's key unencrypted. Use wss://, or set allowPlaintext"
+          + " (HUB_ALLOW_PLAINTEXT=1) on a private network";
+      System.err.println("hub-service: " + refusal);
+      return this;
+    }
     synchronized (lock) {
       if (started) {
         return this;
@@ -379,7 +392,7 @@ public final class Service {
     return this;
   }
 
-  /** Stops the poll thread and closes the connection. */
+  /** Stops the poll thread and closes the connection. A handshake waiting to try again ends with it. */
   public void stop() {
     stopped = true;
     disposeClient();
@@ -450,12 +463,27 @@ public final class Service {
     }
   }
 
+  /** The connection's sender. While the service is started and has none yet, the call waits for one. */
   private Sender<Object> senderOrError() {
-    var s = sender;
-    if (s == null) {
-      throw new IllegalStateException("Service not started");
+    while (true) {
+      var reason = refusal;
+      if (reason != null) {
+        throw new IllegalStateException(reason);
+      }
+      var s = sender;
+      if (s != null) {
+        return s;
+      }
+      if (!started || stopped) {
+        throw new IllegalStateException("Service not started");
+      }
+      try {
+        Thread.sleep(POLL_INTERVAL_MS);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("interrupted while waiting for the hub", interrupted);
+      }
     }
-    return s;
   }
 
   private void pollLoop() {
@@ -478,31 +506,32 @@ public final class Service {
     var current = client;
     if (current == null) {
       var headers = authHeaders();
+      if (headers == null) {
+        return; // Stopped while waiting.
+      }
       try {
         current = channel.connect(addressString(), new ConnectOptions<>(null, headers));
       } catch (RuntimeException error) {
-        reportConnectError(headers, error);
+        reportConnectError(error);
         throw error;
       }
       client = current;
       sender = current.sender();
       wasConnected = false;
-      dialHeaders = headers;
       dialedAt = System.currentTimeMillis();
+      if (stopped) {
+        disposeClient();
+        return;
+      }
     }
     current.poll();
     var connected = current.isConnected();
     if (connected && !wasConnected) {
       wasConnected = true;
       lastError = null;
-      if (learnHubKey(current.sender())) {
-        // Pinned the hub key: reconnect at once with a v1 token.
-        disposeClient();
-        return;
-      }
       sendUpdates(current.sender());
     } else if (!connected && !wasConnected && System.currentTimeMillis() - dialedAt > CONNECT_TIMEOUT_MS) {
-      reportConnectError(dialHeaders, new IllegalStateException("not connected after " + CONNECT_TIMEOUT_MS
+      reportConnectError(new IllegalStateException("not connected after " + CONNECT_TIMEOUT_MS
           + " ms (the hub is down or refused the connect)"));
       disposeClient();
     } else if (!connected && wasConnected) {
@@ -526,42 +555,21 @@ public final class Service {
     }
   }
 
-  /**
-   * On a v0 connection with no pinned key, asks {@code hub/info} for the hub
-   * key and pins it. Returns true when a key was newly pinned.
-   */
-  private boolean learnHubKey(Sender<Object> s) {
-    if (pins == null || hubKey != null) {
-      return false;
-    }
-    CallResult<Object> result;
-    try {
-      result = s.send("hub/info");
-    } catch (RuntimeException error) {
-      return false;
-    }
-    if (!result.isOk() || !(result.value() instanceof Map<?, ?> info) || !(info.get("key") instanceof String key)) {
-      return false; // hub-lite or an older hub-pro: stay on v0.
-    }
-    hubKey = key;
-    try {
-      pins.put(addressKey(), key);
-    } catch (RuntimeException error) {
-      // Unwritable pin file: keep the key for this process only.
-    }
-    return true;
-  }
-
-  private void reportConnectError(Map<String, String> headers, RuntimeException error) {
+  private void reportConnectError(RuntimeException error) {
     var message = String.valueOf(error.getMessage());
     for (var cause = error.getCause(); cause != null; cause = cause.getCause()) {
       message += ": " + cause.getMessage();
     }
     // hub-server refuses a bad token with HTTP 401, which the client doesn't surface, and its reason
-    // (invalid signature, key revoked) stays on the hub; so any failed v1 dial is reported once.
-    if ("1".equals(headers.get("v")) && !message.equals(lastError)) {
-      System.err.println("hub-service: v1 connect to " + addressKey() + " (hub key " + hubKey + ") failed: "
-          + message + ". If the hub key changed or a different server answers, call forgetHubKey().");
+    // (invalid signature, key revoked) stays on the hub; so any failed dial is reported once.
+    report("connect to " + addressKey() + " (hub key " + hubKey + ") failed: " + message
+        + ". If the hub key changed or a different server answers, call forgetHubKey().");
+  }
+
+  /** Records a failure, and reports it once per distinct message. */
+  private void report(String message) {
+    if (!message.equals(lastError)) {
+      System.err.println("hub-service: " + message);
     }
     lastError = message;
   }
@@ -581,25 +589,62 @@ public final class Service {
   }
 
   /**
-   * Fresh hub-server auth headers for a connect: {@code auth} is a fresh signed
-   * token ({@code key.<pub>.<sig>.<expiry>}) and {@code v} is the protocol
-   * version: {@code 1} with a token bound to the pinned hub key, else
-   * {@code 0}. Built once per connect, so every (re)connect gets a fresh
-   * token. hub-lite ignores the headers.
+   * Runs before every connection attempt (protocol.md section 2). Comes back
+   * with a token over a fresh challenge from a hub that proved its key; until
+   * one has, it holds the attempt back, so nothing goes out and calls keep
+   * waiting. Null once the service is stopped.
    */
   Map<String, String> authHeaders() {
-    var headers = new LinkedHashMap<String, String>();
-    var key = hubKey;
-    if (sign != null) {
-      headers.put("auth", sign.get());
-      headers.put("v", "0");
-    } else if (key != null) {
-      headers.put("auth", Keychain.signHub(key));
-      headers.put("v", "1");
-    } else {
-      headers.put("auth", Keychain.sign());
-      headers.put("v", "0");
+    var delay = HANDSHAKE_RETRY_MS;
+    while (!stopped) {
+      try {
+        return handshake();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return null;
+      } catch (RuntimeException error) {
+        report(addressKey() + ": " + error.getMessage() + ", sending it nothing");
+      }
+      try {
+        Thread.sleep(delay);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return null;
+      }
+      delay = Math.min(delay * 2, HANDSHAKE_MAX_RETRY_MS);
     }
+    return null;
+  }
+
+  /** Asks the hub for its proof, checks it against the pin and signs for that answer alone. */
+  private Map<String, String> handshake() throws InterruptedException {
+    var info = HubProof.ask(addressString(), HUB_INFO_TIMEOUT_MS);
+    var pinned = hubKey != null ? hubKey : pins.get(addressKey());
+    if (pinned != null && !pinned.equals(info.key())) {
+      throw new IllegalStateException("it answers with key " + info.key() + ", not the pinned " + pinned
+          + ". Call forgetHubKey() if its key really changed");
+    }
+    hubKey = info.key();
+    if (pinned == null) {
+      try {
+        pins.put(addressKey(), info.key());
+      } catch (RuntimeException error) {
+        // Unwritable pin file: keep the key for this process only.
+        System.err.println("hub-service: pin hub key: " + error.getMessage());
+      }
+    }
+    return signedHeaders(info.key(), info.challenge());
+  }
+
+  /** The headers for one connect: a token over {@code challenge} and the device certificate. */
+  Map<String, String> signedHeaders(String key, String challenge) {
+    var headers = new LinkedHashMap<String, String>();
+    var token = sign != null ? sign.apply(key, challenge) : Keychain.signHub(key, challenge);
+    if (token == null) {
+      throw new IllegalStateException("the custom sign returned no token");
+    }
+    headers.put("auth", token);
+    headers.put("v", Keychain.AUTH_VERSION);
     var device = deviceHeader();
     if (device != null) {
       headers.put("device", device);
@@ -611,6 +656,7 @@ public final class Service {
     if (address instanceof Integer port) {
       return "ws://127.0.0.1:" + port;
     }
-    return String.valueOf(address);
+    var text = String.valueOf(address).trim();
+    return text.matches("\\d+") ? "ws://127.0.0.1:" + text : text;
   }
 }

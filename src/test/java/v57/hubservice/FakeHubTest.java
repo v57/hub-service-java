@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** End to end against a fake hub: hub/info pinning, the v1 reconnect, the device header and caller identity. */
+/** End to end against a fake hub: the proof, pinning, the device header and caller identity. */
 class FakeHubTest {
   private static final String HUB_KEY = "MCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=";
 
@@ -86,34 +86,23 @@ class FakeHubTest {
 
     var updates = new CopyOnWriteArrayList<Object>();
     var hub = new Channel<Map<String, String>>()
+        .post("hub/info", Object.class, Object.class, request -> FakeHub.proving("hub").apply(FakeHub.nonce(request.body()), "challenge"))
         .post("hub/service/update", Object.class, Object.class, request -> {
           updates.add(request.body());
           return null;
         });
     server = hub.listen(port, new ListenOptions<>());
-    serverThread = new Thread(() -> {
-      while (running) {
-        server.poll();
-        try {
-          Thread.sleep(1);
-        } catch (InterruptedException e) {
-          return;
-        }
-      }
-    });
-    serverThread.setDaemon(true);
-    serverThread.start();
+    serverThread = FakeHub.pump(server, () -> running);
     await(() -> !updates.isEmpty());
   }
 
   @Test
-  void pinsHubKeyReconnectsWithV1AndSeesTheCaller() throws Exception {
+  void provesPinsAndSeesTheCaller() throws Exception {
     List<Map<String, String>> connects = new CopyOnWriteArrayList<>();
     var latest = new AtomicReference<Sender<Map<String, String>>>();
     var updates = new CopyOnWriteArrayList<Map<String, String>>();
     var hub = new Channel<Map<String, String>>()
-        .post("hub/info", Object.class, Object.class,
-            request -> Map.of("key", HUB_KEY, "protocol", 1, "pro", true, "mode", "default-allow"))
+        .post("hub/info", Object.class, Object.class, request -> FakeHub.proving("hub").apply(FakeHub.nonce(request.body()), "challenge"))
         .post("hub/service/update", Object.class, Object.class, request -> {
           updates.add(request.state());
           return null;
@@ -126,18 +115,7 @@ class FakeHubTest {
         },
         (state, sender) -> latest.set(sender),
         null));
-    serverThread = new Thread(() -> {
-      while (running) {
-        server.poll();
-        try {
-          Thread.sleep(1);
-        } catch (InterruptedException e) {
-          return;
-        }
-      }
-    });
-    serverThread.setDaemon(true);
-    serverThread.start();
+    serverThread = FakeHub.pump(server, () -> running);
 
     Keychain.setKeyPath(tmp.resolve("auth").toString());
     var address = "ws://127.0.0.1:" + server.port();
@@ -153,14 +131,14 @@ class FakeHubTest {
     });
     service.start();
 
-    // First connect v0 → hub/info → pin → reconnect with v1, then the update.
+    // hub/info on an anonymous connection, then the service's own connection and its update.
     await(() -> !updates.isEmpty());
-    assertTrue(connects.size() >= 2, "expected a v0 connect then a v1 connect, got " + connects);
-    assertEquals("0", connects.get(0).get("v"));
+    assertEquals(2, connects.size(), "expected an anonymous connect then the service's, got " + connects);
+    assertTrue(connects.get(0).get("auth") == null);
     var v1 = updates.get(updates.size() - 1);
     assertEquals("1", v1.get("v"));
     var auth = v1.get("auth").split("\\.");
-    assertTrue(verifies(auth[1], "hub1:" + HUB_KEY + ":" + auth[3], auth[2]));
+    assertTrue(verifies(auth[1], "hub1:" + HUB_KEY + ":challenge:" + auth[3], auth[2]));
     assertEquals("{\"ws://127.0.0.1:" + server.port() + "\":\"" + HUB_KEY + "\"}",
         Files.readString(tmp.resolve("hubs.json")));
     assertEquals(HUB_KEY, service.hubKey());

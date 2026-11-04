@@ -222,6 +222,7 @@ class NetworkTest {
   void declaredSharesArePublishedOnConnect() throws Exception {
     var replaced = new CopyOnWriteArrayList<Object>();
     var hub = new Channel<Object>()
+        .post("hub/info", Object.class, Object.class, request -> FakeHub.proving("hub").apply(FakeHub.nonce(request.body()), "challenge"))
         .post("hub/service/update", Object.class, Object.class, request -> null)
         .post("network/shares/replace", Object.class, Object.class, request -> {
           replaced.add(request.body());

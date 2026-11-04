@@ -29,6 +29,11 @@ class DeviceTest {
     Keychain.setKeyPath(null);
   }
 
+  /** What a connect to a hub that proved its key sends. */
+  private static java.util.Map<String, String> headers(Service service) {
+    return service.signedHeaders("hub-key", "challenge");
+  }
+
   private Service service(ServiceOptions options) {
     Keychain.setKeyPath(tmp.resolve("auth").toString());
     return new Service(options.address(4100).deviceKeyPath(tmp.resolve("dev/device.key").toString()));
@@ -59,7 +64,7 @@ class DeviceTest {
   @Test
   void connectHeadersCarryASignedCertificate() throws Exception {
     var service = service(new ServiceOptions().name("Echo").deviceName("Mac Studio").platform("macos"));
-    var headers = service.authHeaders();
+    var headers = headers(service);
     var header = headers.get("device");
     var parts = header.split("\\.");
     assertEquals(2, parts.length);
@@ -84,8 +89,8 @@ class DeviceTest {
   @Test
   void certificateIsReusedUntilRenewal() {
     var service = service(new ServiceOptions().deviceName("box"));
-    var first = service.authHeaders().get("device");
-    assertSame(first, service.authHeaders().get("device"));
+    var first = headers(service).get("device");
+    assertSame(first, headers(service).get("device"));
   }
 
   @Test
@@ -102,13 +107,13 @@ class DeviceTest {
   @Test
   void parentIsDeclared() {
     var service = service(new ServiceOptions().deviceName("builder").platform("linux").parent("Mac Studio"));
-    assertEquals("Mac Studio", Device.decodeCertificate(service.authHeaders().get("device")).get("parent"));
+    assertEquals("Mac Studio", Device.decodeCertificate(headers(service).get("device")).get("parent"));
   }
 
   @Test
   void deviceModeCanBeTurnedOff() {
     var service = service(new ServiceOptions().device(false));
-    assertNull(service.authHeaders().get("device"));
+    assertNull(headers(service).get("device"));
     assertFalse(Files.exists(tmp.resolve("dev/device.key")));
   }
 
@@ -116,7 +121,7 @@ class DeviceTest {
   void callerProvidedKeyIsUsed() {
     var key = KeyFile.generate();
     var service = service(new ServiceOptions().deviceKey(key).deviceName("app"));
-    assertEquals(key.publicKey(), Device.decodeCertificate(service.authHeaders().get("device")).get("device"));
+    assertEquals(key.publicKey(), Device.decodeCertificate(headers(service).get("device")).get("device"));
     assertFalse(Files.exists(tmp.resolve("dev/device.key")));
   }
 
@@ -126,7 +131,7 @@ class DeviceTest {
     Files.writeString(path, "garbage");
     Keychain.setKeyPath(tmp.resolve("auth").toString());
     var service = new Service(new ServiceOptions().deviceKeyPath(path.toString()));
-    var headers = service.authHeaders();
+    var headers = headers(service);
     assertNull(headers.get("device"));
     assertNotEquals(null, headers.get("auth"));
   }

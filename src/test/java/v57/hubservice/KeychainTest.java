@@ -24,7 +24,7 @@ class KeychainTest {
       "MCowBQYDK2VwAyEAHZSDpmbLRjLrOyNMugsStFqK5EYcNluUekE4di+FalQ=";
 
   private static final Pattern TOKEN = Pattern.compile(
-      "^key\\.[A-Za-z0-9+/]+={0,2}\\.[A-Za-z0-9+/]+={0,2}\\.\\d+$");
+      "^key\\.[A-Za-z0-9+/]+={0,2}\\.[A-Za-z0-9+/]+={0,2}\\.\\d+\\.nonce$");
 
   @TempDir
   Path tmp;
@@ -32,9 +32,9 @@ class KeychainTest {
   @Test
   void signReturnsKeyTokenShape() {
     Keychain.setKeyPath(tmp.resolve("shape").toString());
-    var token = Keychain.sign();
+    var token = Keychain.signHub("hub-key", "nonce");
     assertTrue(TOKEN.matcher(token).matches(), "unexpected token: " + token);
-    assertEquals(4, token.split("\\.").length);
+    assertEquals(5, token.split("\\.").length);
     // pub part is the 44-byte SPKI DER public key, base64 (60 chars).
     assertEquals(60, token.split("\\.")[1].length());
   }
@@ -42,20 +42,20 @@ class KeychainTest {
   @Test
   void signatureVerifiesAgainstPublicKey() throws Exception {
     Keychain.setKeyPath(tmp.resolve("verify").toString());
-    var parts = Keychain.sign().split("\\.");
+    var parts = Keychain.signHub("hub-key", "nonce").split("\\.");
 
     var publicKey = KeyFactory.getInstance("Ed25519")
         .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(parts[1])));
     var verifier = Signature.getInstance("Ed25519");
     verifier.initVerify(publicKey);
-    verifier.update(parts[3].getBytes(StandardCharsets.UTF_8));
+    verifier.update(("hub1:hub-key:nonce:" + parts[3]).getBytes(StandardCharsets.UTF_8));
     assertTrue(verifier.verify(Base64.getDecoder().decode(parts[2])),
         "signature must verify against the token's public key");
 
-    // expiry is the decimal epoch-seconds string of now + 60 (protocol.md).
+    // expiry is the decimal epoch-seconds string of now + 30 (protocol.md).
     var expiry = Long.parseLong(parts[3]);
     var now = System.currentTimeMillis() / 1000;
-    assertTrue(expiry >= now + 59 && expiry <= now + 61, "unexpected expiry: " + expiry);
+    assertTrue(expiry >= now + 29 && expiry <= now + 31, "unexpected expiry: " + expiry);
   }
 
   @Test
@@ -72,7 +72,7 @@ class KeychainTest {
     // Reload from the file: same public key, tokens still verify.
     Keychain.setKeyPath(path.toString());
     assertEquals(pub1, Keychain.publicKey());
-    var token = Keychain.sign();
+    var token = Keychain.signHub("hub-key", "nonce");
     assertTrue(TOKEN.matcher(token).matches(), "unexpected token: " + token);
     assertEquals(pub1, token.split("\\.")[1]);
   }
@@ -85,7 +85,7 @@ class KeychainTest {
 
     assertEquals(TS_TEST_PUB, Keychain.publicKey());
 
-    var parts = Keychain.sign().split("\\.");
+    var parts = Keychain.signHub("hub-key", "nonce").split("\\.");
     assertEquals(TS_TEST_PUB, parts[1]);
 
     // The TS key's signature must verify against the TS public key.
@@ -93,7 +93,7 @@ class KeychainTest {
         .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(parts[1])));
     var verifier = Signature.getInstance("Ed25519");
     verifier.initVerify(publicKey);
-    verifier.update(parts[3].getBytes(StandardCharsets.UTF_8));
+    verifier.update(("hub1:hub-key:nonce:" + parts[3]).getBytes(StandardCharsets.UTF_8));
     assertTrue(verifier.verify(Base64.getDecoder().decode(parts[2])));
   }
 
@@ -107,6 +107,6 @@ class KeychainTest {
     var notBase64 = tmp.resolve("garbage");
     Files.writeString(notBase64, "not base64 at all!!");
     Keychain.setKeyPath(notBase64.toString());
-    assertThrows(IllegalArgumentException.class, Keychain::sign);
+    assertThrows(IllegalArgumentException.class, () -> Keychain.signHub("hub-key", "nonce"));
   }
 }

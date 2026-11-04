@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -37,7 +38,7 @@ class VectorsTest {
     return (Map<String, Object>) value;
   }
 
-  private static KeyFile key(String name) {
+  static KeyFile key(String name) {
     return KeyFile.parse((String) at("keys", name).get("keyFile"));
   }
 
@@ -60,20 +61,45 @@ class VectorsTest {
   }
 
   @Test
-  void authTokensV0AndV1() {
+  void authTokenMatches() {
     var auth = at("auth");
     var expiry = number(auth, "expiry");
+    var nonce = (String) auth.get("nonce");
     var service = key("service");
     var hubKey = (String) at("keys", "hub").get("publicKey");
 
-    var v0 = at("auth", "v0");
-    assertEquals(v0.get("signature"), service.sign((String) v0.get("signedData")));
-    assertEquals(v0.get("header"), Keychain.token(service, null, expiry));
-
     var v1 = at("auth", "v1");
-    assertEquals("hub1:" + hubKey + ":" + expiry, v1.get("signedData"));
+    assertEquals("hub1:" + hubKey + ":" + nonce + ":" + expiry, v1.get("signedData"));
     assertEquals(v1.get("signature"), service.sign((String) v1.get("signedData")));
-    assertEquals(v1.get("header"), Keychain.token(service, hubKey, expiry));
+    assertEquals(v1.get("header"), Keychain.token(service, hubKey, nonce, expiry));
+  }
+
+  @Test
+  void hubInfoProof() {
+    var vector = at("hubInfo");
+    var hubKey = (String) at("keys", "hub").get("publicKey");
+    var nonce = (String) vector.get("nonce");
+    var proof = (String) vector.get("proof");
+    assertEquals(vector.get("signedData"), HubProof.signedData(hubKey, nonce));
+    assertTrue(new HubProof.Info(hubKey, proof, "c").proves(nonce));
+    assertFalse(new HubProof.Info(hubKey, proof, "c").proves("another-nonce-another-nonce"));
+    assertFalse(new HubProof.Info((String) at("keys", "service").get("publicKey"), proof, "c").proves(nonce));
+    assertFalse(new HubProof.Info(hubKey, null, "c").proves(nonce));
+    assertFalse(new HubProof.Info(hubKey, proof, null).proves(nonce));
+    assertFalse(new HubProof.Info(hubKey, "not base64!", "c").proves(nonce));
+    assertFalse(new HubProof.Info("not a key", proof, "c").proves(nonce));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void transports() {
+    var cases = (List<Map<String, Object>>) VECTORS.get("transport");
+    assertFalse(cases.isEmpty());
+    for (var entry : cases) {
+      assertEquals(entry.get("transport"), HubTransport.of(entry.get("url")).label(), (String) entry.get("url"));
+    }
+    assertEquals(HubTransport.LOOPBACK, HubTransport.of(1997));
+    assertEquals(HubTransport.LOOPBACK, HubTransport.of("1997"));
   }
 
   @Test

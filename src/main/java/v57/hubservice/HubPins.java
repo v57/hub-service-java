@@ -11,9 +11,8 @@ import java.util.Map;
  * Pinned hub keys ({@code Docs/Devices/protocol.md} section 2): the file
  * {@code hubs.json} beside the service key file, a JSON object
  * {@code {"<address>": "<hub SPKI>"}}, keyed by the normalized address
- * ({@link Service#normalizeAddress(Object)}). A service learns a hub's key from
- * {@code hub/info} on its first (v0) connection and signs v1 tokens bound to
- * it from then on.
+ * ({@link Service#normalizeAddress(Object)}). A service pins the first key a hub
+ * proved in {@code hub/info}; a hub that later claims another key gets nothing.
  */
 public final class HubPins {
   private final Path path;
@@ -66,7 +65,7 @@ public final class HubPins {
         return new LinkedHashMap<>((Map<String, Object>) map);
       }
     } catch (Exception ignored) {
-      // A corrupt pin file counts as empty: the next hub/info pins again.
+      // A corrupt pin file counts as empty: the next proven key pins again.
     }
     return new LinkedHashMap<>();
   }

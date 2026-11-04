@@ -1,6 +1,6 @@
 package v57.hubservice;
 
-import java.util.function.Supplier;
+import java.util.function.BiFunction;
 
 /**
  * Options for {@link Service}.
@@ -9,11 +9,14 @@ import java.util.function.Supplier;
  * {@code 1997} or the {@code HUB} environment variable. {@code name} is the
  * profile name shown in the hub. {@code icon} is a String or a
  * {@code {"symbol": .., "text": ..}} map. {@code sign} supplies the hub-server
- * auth token for each connect (default: the keychain — the {@code auth} key
- * file in the cwd, or {@code $HUBKEY} — signing v1 tokens bound to the hub
- * key once it is pinned; a custom supplier always connects with {@code v: 0}).
- * {@code hubKey} supplies the hub's key up front (from an invitation or
- * config) instead of learning it from {@code hub/info}.
+ * auth token for each connect from the key the hub proved and the challenge of
+ * this connect (default: the keychain — the {@code auth} key file in the cwd, or
+ * {@code $HUBKEY}). {@code hubKey} supplies the hub's key up front (from an
+ * invitation or config) instead of pinning the first one a hub proves.
+ * {@code allowPlaintext} dials plain {@code ws://} beyond loopback, the overlay
+ * and the LAN, which would carry the service's key unencrypted: for private
+ * networks the SDK can't recognize, such as a container's {@code ws://hub:1997}
+ * (also {@code HUB_ALLOW_PLAINTEXT=1}).
  *
  * <p>Device mode ({@code Docs/Devices/protocol.md} section 3) is on by
  * default: the device key ({@code deviceKey}, else the file at
@@ -31,10 +34,15 @@ public final class ServiceOptions {
   public String name;
   /** Profile icon: a String or a {@code {"symbol": .., "text": ..}} map. */
   public Object icon;
-  /** hub-server auth token supplier, called once per (re)connect. Null = the keychain (v1 once pinned). */
-  public Supplier<String> sign;
-  /** The hub's SPKI, if known up front. Null = learn and pin it via {@code hub/info}. */
+  /**
+   * hub-server auth token from {@code (hub key, challenge)}, called once per (re)connect after the
+   * hub proved its key. Null = the keychain.
+   */
+  public BiFunction<String, String, String> sign;
+  /** The hub's SPKI, if known up front. Null = pin the first key a hub proves. */
   public String hubKey;
+  /** Dial plain {@code ws://} beyond loopback, the overlay and the LAN. */
+  public boolean allowPlaintext;
   /** Device mode: send a device certificate with every connect (default true). */
   public boolean device = true;
   /** A caller-provided device key (e.g. kept in an app's own keychain). Null = the device key file. */
@@ -74,8 +82,13 @@ public final class ServiceOptions {
     return this;
   }
 
-  public ServiceOptions sign(Supplier<String> sign) {
+  public ServiceOptions sign(BiFunction<String, String, String> sign) {
     this.sign = sign;
+    return this;
+  }
+
+  public ServiceOptions allowPlaintext(boolean allowPlaintext) {
+    this.allowPlaintext = allowPlaintext;
     return this;
   }
 
