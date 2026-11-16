@@ -15,11 +15,28 @@ generated if missing), exactly like the TS `hub-service/keychain.ts`.
 
 ## Install
 
-Composite build against [channel-java](https://github.com/v57/channel-java)
-(`includeBuild` in `settings.gradle.kts`). Java 21 toolchain required.
+Not published to Maven Central. The build includes [channel-java](https://github.com/v57/channel-java) from
+`../../Channel/channel-java` (`includeBuild` in `settings.gradle.kts`), so clone both into the Hub layout. Java 21
+toolchain required.
 
 ```bash
+mkdir -p Hub/Channel Hub/HubService
+git clone https://github.com/v57/channel-java Hub/Channel/channel-java
+git clone https://github.com/v57/hub-service-java Hub/HubService/hub-service-java
+cd Hub/HubService/hub-service-java
 ./gradlew build
+```
+
+To use it from your own Gradle build, include it as a composite build (it brings channel-java along):
+
+```kotlin
+// settings.gradle.kts
+includeBuild("path/to/Hub/HubService/hub-service-java")
+
+// build.gradle.kts
+dependencies {
+  implementation("v57.hubservice:hub-service-java")
+}
 ```
 
 ## Usage
@@ -27,28 +44,34 @@ Composite build against [channel-java](https://github.com/v57/channel-java)
 Start a hub first (`new Hub()` from hub-lite, listens on 1997), then:
 
 ```java
-import v57.hubservice.Service;
-import v57.hubservice.ServiceOptions;
+import java.util.List;
+import java.util.Map;
 import v57.hubservice.App;
 import v57.hubservice.AppHeader;
-import static v57.hubservice.App.*;
+import v57.hubservice.Service;
+import v57.hubservice.ServiceOptions;
 
-var service = new Service(new ServiceOptions("Echo",
-    Map.of("symbol", "speaker.wave.2", "text", "E")));
-service.post("echo", body -> body);
-service.post("echo/upper", body -> String.valueOf(body).toUpperCase());
-service.app(new App(
-    new AppHeader("app", "Echo", "echo/ui"),
-    java.util.List.of(
-        "Hello from Java",
-        textField("echo", "Text to echo", new Action("echo/upper", "value", "value")),
-        cell("$Echo", "value"),
-        button("Upper", new Action("echo/upper", "value", "value"))
-    ),
-    Map.of("hello", "world")
-));
-service.start(); // spawns a poll thread; re-announces on every reconnect
-// keep the JVM alive (e.g. Thread.sleep / await)
+public final class Echo {
+  public static void main(String[] args) throws InterruptedException {
+    var service = new Service(new ServiceOptions()
+        .name("Echo")
+        .icon(Map.of("symbol", "speaker.wave.2", "text", "E")));
+    service.post("echo", body -> body);
+    service.post("echo/upper", body -> String.valueOf(body).toUpperCase());
+    service.app(new App(
+        new AppHeader("Echo", "echo/ui"),
+        List.of(
+            "Hello from Java",
+            App.textField("echo", "Text to echo", new App.Action("echo/upper", "value", "value")),
+            App.cell("$Echo", "value"),
+            App.button("Upper", new App.Action("echo/upper", "value", "value"))
+        ),
+        Map.of("hello", "world")
+    ));
+    service.start(); // spawns a daemon poll thread; re-announces on every reconnect
+    Thread.currentThread().join(); // keep the JVM alive
+  }
+}
 ```
 
 Call it through the hub (any language):
@@ -59,8 +82,8 @@ Object response = service.send("echo/upper", "hello"); // "HELLO"
 
 ## API
 
-- `Service(ServiceOptions)` — `ServiceOptions(String name, Map<String,Object> icon)`,
-  default address 1997 or `HUB` env
+- `Service(ServiceOptions)` — `new ServiceOptions().address(...).name(...).icon(...)` (fluent) or
+  `new ServiceOptions(Object address, String name, Object icon)`; default address 1997 or `HUB` env
 - `ServiceOptions.sign((hubKey, challenge) -> token)` — custom token factory given
   the proven hub key and the challenge (turns off device mode);
   `allowPlaintext(true)` dials plain `ws://` beyond loopback, the overlay and the
